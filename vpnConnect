@@ -1,0 +1,183 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use WWW::Mechanize;
+use Data::Dumper;
+use Readonly;
+use File::Path qw(make_path);
+use Getopt::Long;
+use Term::ReadLine;
+
+
+Readonly my $TMP_PATH => '/tmp/vpnConnect/';
+Readonly my $NETRC_HOST_NAME => 'vpn';
+Readonly my $NETRC_PATH => $ENV{'HOME'}."/.netrc";
+Readonly my $EXISTING_SESSION => 'There are already other user sessions in progress:';
+Readonly my $CONTINUE_BTN_NAME => 'btnContinue';
+Readonly my $TOKEN_RESYNC => 'Token Resync Required';
+Readonly my $TOKEN_RESYNC_BTN_NAME => 'secidactionEnter';
+Readonly my $LOGIN_FAIL => 'Invalid secondary username or password';
+
+BEGIN: {
+
+    if ( ! -d $TMP_PATH ) {
+        # TODO: error handling?
+        make_path($TMP_PATH);
+    }
+};
+
+MAIN: {
+
+    my ($user, $password, $token, $force, $noninteractive, $host);
+
+    my $status = GetOptions(
+        'user=s' => \$user,
+        'token=s' => \$token,
+        'password=s' => \$password,
+        'force' => \$force,
+        'noninteractive' => \$noninteractive,
+        'host' => \$host,
+    );
+
+    if (! $password || ! $user) {
+        print "No user/pw given, Using $NETRC_PATH\n";
+        ($user, $password) = _readNetRc();
+    }
+
+    if (! $user) {
+        die "--user (or a proper .netrc) is required!\n";
+    }
+    if (! $password) {
+        die "--password (or a proper .netrc) is required!\n";
+    }
+    if (! $token) {
+        die "--token is required!\n";
+    }
+
+    print "user $user token $token (pw redacted)\n";
+
+    my $mech = WWW::Mechanize->new();
+    $mech->get("https://$host/dana-na/auth/url_0/welcome.cgi");
+    dumpWebpage($mech, 'loginPage');
+
+    $mech->set_visible($user, $password, $token);
+    
+    $mech->click();
+
+    dumpWebpage($mech, 'firstPageAfterLogin');
+
+    # see if our credentails failed
+    if ($mech->content =~ m/$LOGIN_FAIL/) {
+        die "AuthenticationException: Bad credentials\n"
+    }
+
+    # First, a token resync might be needed.
+    if ($mech->content =~ m/$TOKEN_RESYNC/) {
+        my $term = Term::ReadLine->new("Token Resync Prompt");
+        warn "Token Resync Required\n\n";
+        die "VPNException: Run without --noninteractive to perform token resync\n"
+            if ( $noninteractive );
+
+        my $prompt = "Please wait for your token to change, then enter the new token code: ";
+        my $newCode = undef;
+        while ( defined ($newCode = $term->readline($prompt)) ) {
+            chomp($newCode);
+            print "\n\nNewCode: '$newCode'\n\n";
+            if ( $newCode !~ m/^\d{6}$/ ) {
+                warn "Invalid code '$newCode': should be six digits only ('123456')\n";
+                $newCode = undef;
+                next;
+            }
+            last;
+        }
+
+        $mech->set_visible($newCode);
+        $mech->click($TOKEN_RESYNC_BTN_NAME);
+
+        dumpWebpage($mech, 'continueAfterTokenResync');
+    }
+
+    # If login was successful - if we already have a session, we will see the
+    # string 'There are already other user sessions in progress:'
+    if ($mech->content =~ m/$EXISTING_SESSION/) {
+        print "Detected an existing session\n";
+        die "If you want to override, use --force" if ( ! $force );
+        $mech->click($CONTINUE_BTN_NAME);
+        dumpWebpage($mech, 'continueAfterExistingSession');
+
+    }
+
+    my $DSID = _getDsidFromCookies($mech->{'cookie_jar'});
+
+    "Found DSID: $DSID\n";
+
+    # now run: sudo ./ncui -h $host -c DSID=5d189773608999548c8c56d76a53ec16 -f ssl.crt
+    exit 0;
+};
+
+sub _getDsidFromCookies {
+    my $cookieJar = shift;
+
+    my $DSIDS = [];
+    my $scan = sub {
+        my ($version, $key, $val, $path, $domain, $port, $pathSpec, $secure, $expires, $discard, $hash) = @_;
+        if ($key eq 'DSID') {
+            print "Discovered DSID: $val\n";
+            push @{$DSIDS}, $val;
+        }
+    };
+    $cookieJar->scan($scan);
+    if (scalar @{$DSIDS} != 1) {
+        die "VPNException: Could not get a unique DSID: "
+            . Dumper($DSIDS) . "\n";
+    }
+    return $DSIDS->[0];
+}
+
+
+
+sub _readNetRc {
+    open(my $FH, '<', $NETRC_PATH)
+        or die "IOException: Unable to read $NETRC_PATH\n";
+    while(my $line = <$FH>) {
+        chomp($line);
+#        print "Found line: $line\n";
+        next unless ( $line =~ m/^machine $NETRC_HOST_NAME$/ );
+        my $userline = <$FH>;
+        my $pwline = <$FH>;
+        chomp($userline); chomp($pwline);
+        my ($user, $pw);
+        if ( $userline =~ m/^login (.*)$/ ) {
+            $user = $1;
+        }
+        if ( $pwline =~ m/^password (.*)$/ ) {
+            $pw = $1;
+        }
+        return ($user, $pw) if ( $user && $pw );
+    }
+    die "Unable to get user/pw from .netrc.  Must provide --user and --password, or use $NETRC_PATH\n";
+}
+
+sub dumpWebpage {
+    my ($mech, $name) = @_;
+
+    my $content = $mech->content;
+
+    my $date = `date +%s`;
+    chomp($date);
+    my $path = $TMP_PATH . "$name-$date.html";
+    print "PATH: $path\n";
+    open(my $FH, '>', $path)
+        or die "IOException: Unable to open $path for writing\n";
+    print $FH $content;
+    close($FH)
+        or die "IOException: Unable to close file $path\n";
+
+    if ( ! $mech->success ) {
+        die "Unsuccessful web request: $name\n";
+    }
+}
+
+
