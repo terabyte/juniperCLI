@@ -1,0 +1,42 @@
+To build the 'ncui' binary from the juniper distribution, do the following:
+
+1. Get the juniper dist
+
+One is included here, but you can also simply use a browser to try to log in
+from a linux box.  It should drop a copy of the client in your home directory,
+~/.juniper/network_connect.  Everything you need is there.
+
+2. Install dependencies
+
+Use apt, yum, or the package management system of choice for your distro.  On
+debian, it looks like this:
+
+apt-get install gcc-multilib
+
+3. Invoke GCC on the shared object file
+
+You should have libncui.so.  Invoke gcc like so:
+
+gcc -m32 -Wl,-rpath,`pwd` -o ncui libncui.o
+
+It is important you run this command in the same directory as the libncui.o
+file, and you keep the shared object file as well as the binary in the same
+directory.
+
+4. Generate the SSL cert for your host:
+
+Run this:
+
+openssl s_client -connect (your host):443 2>&1
+
+Take the output between '-BEGIN CERTIFICATE-' and '-END CERTIFICATE-' and pipe
+it to this command:
+
+openssl x509 -outform der > ssl.crt
+
+now ssl.crt will be in the correct format.
+
+5. The command line client is executed like this:
+
+ncui -h somehost -c DSID=nnnnnn.... -f ssl.crt
+

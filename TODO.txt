@@ -1,0 +1,4 @@
+TODO:
+1. Fix generating the ssl.crt file
+2. Make the daemon fork off upon running
+3. Documentation
