@@ -109,7 +109,6 @@ MAIN: {
         my $newCode = undef;
         while ( defined ($newCode = $term->readline($prompt)) ) {
             chomp($newCode);
-            print "\n\nNewCode: '$newCode'\n\n";
             if ( $newCode !~ m/^\d{6}$/ ) {
                 warn "Invalid code '$newCode': should be six digits only ('123456')\n";
                 $newCode = undef;
@@ -170,9 +169,12 @@ sub _generateSsl {
     my $certEnd = 0;
 
     foreach my $line ( @{$cert} ) {
+        #print "Scanning line: $line\n";
+
         if ($certStart && ! $certEnd) {
             # look for cert end
             if ( $line =~ m/-END CERTIFICATE-/ ) {
+                push @{$lines}, $line;
                 $certEnd = 1;
                 last;
             }
@@ -183,16 +185,17 @@ sub _generateSsl {
         }
         # havent found cert start yet
         next unless ($line =~ m/-BEGIN CERTIFICATE-/);
+        push @{$lines}, $line;
         $certStart = 1;
     }
 
     if (scalar @{$lines} > 0) {
         print "Got certificate, converting to appropriate form\n";
-        open(my $OPENSSL_X509, '| openssl x509 -outform der > $SSL_CERT_PATH')
+        open(my $OPENSSL_X509, "| openssl x509 -outform der > $SSL_CERT_PATH")
             or die "IOException: Unable to open pipe from this script: $!\n";
-        foreach my $line ( @{$lines} ) {
-            print  $OPENSSL_X509 $line;
-        }
+
+        print $OPENSSL_X509 join("\n", @{$lines});
+
         close($OPENSSL_X509)
             or die "IOException: Unable to close pipe to openssl: $!\n";
     }

@@ -1,4 +1,4 @@
 TODO:
-1. Fix generating the ssl.crt file
+1. Fix it to not prompt for pw from ncui, or use expect or something
 2. Make the daemon fork off upon running
 3. Documentation
