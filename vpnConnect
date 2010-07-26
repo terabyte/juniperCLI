@@ -8,7 +8,7 @@ use Data::Dumper;
 use Readonly;
 use File::Path qw(make_path);
 use Getopt::Long;
-use Term::ReadLine;
+#use Term::ReadLine;
 use FindBin qw($Bin);
 
 
@@ -25,6 +25,8 @@ Readonly my $SSL_CERT_PATH => "$Bin/ssl.crt";
 
 BEGIN: {
 
+    $|=1;
+    
     if ( ! -d $TMP_PATH ) {
         # TODO: error handling?
         make_path($TMP_PATH);
@@ -63,18 +65,32 @@ MAIN: {
     }
 
     if (! $password || ! $user) {
-        print "No user/pw given, Using $NETRC_PATH\n";
-        ($user, $password) = _readNetRc();
+        print "No user/pw given, trying $NETRC_PATH\n";
+        my ($a, $b) = _readNetRc();
+        $user ||= $a;
+        $password ||= $b;
     }
 
     if (! $user) {
-        die "--user (or a proper .netrc) is required!\n";
+        die "VPNException: Run without --noninteractive to provide token via prompt\n"
+            if ( $noninteractive );
+            $user = _getOther("Enter username: ");
     }
     if (! $password) {
-        die "--password (or a proper .netrc) is required!\n";
+        die "VPNException: Run without --noninteractive to provide password via prompt\n"
+            if ( $noninteractive );
+        print "No password given and no $NETRC_PATH found\n";
+        $password = _getPassword($user);
     }
     if (! $token) {
-        die "--token is required!\n";
+        die "VPNException: Run without --noninteractive to provide token via prompt\n"
+            if ( $noninteractive );
+        while (! defined $token || $token !~ m/^\d{6}$/) {
+            $token = _getOther("Enter token: ");
+            if ( $token !~ m/^\d{6}$/ ) {
+                warn "Invalid code '$token': should be six digits only ('123456')\n";
+            }
+        }
     }
 
     _generateSsl($host);
@@ -106,15 +122,12 @@ MAIN: {
             if ( $noninteractive );
 
         my $prompt = "Please wait for your token to change, then enter the new token code: ";
-        my $newCode = undef;
-        while ( defined ($newCode = $term->readline($prompt)) ) {
-            chomp($newCode);
+        my $newCode;
+        while( $newCode !~ m/^\d{6}$/ ) {
+            $newCode = _getOther($prompt);
             if ( $newCode !~ m/^\d{6}$/ ) {
                 warn "Invalid code '$newCode': should be six digits only ('123456')\n";
-                $newCode = undef;
-                next;
             }
-            last;
         }
 
         $mech->set_visible($newCode);
@@ -228,7 +241,8 @@ sub _getDsidFromCookies {
 
 sub _readNetRc {
     open(my $FH, '<', $NETRC_PATH)
-        or die "IOException: Unable to read $NETRC_PATH\n";
+        or return (undef, undef);
+
     while(my $line = <$FH>) {
         chomp($line);
 #        print "Found line: $line\n";
@@ -268,4 +282,32 @@ sub dumpWebpage {
     }
 }
 
+sub _getPassword {
+    my $user = shift;
+
+    eval "require Term::ReadKey;";
+    if ($@) {
+        die "In order to be prompted for the pw, you must have Term::ReadKey installed.  Try: 'apt-get install libterm-readkey-perl'\n";
+    }
+    print "Enter password for user '$user': ";
+    Term::ReadKey::ReadMode('noecho');
+    my $password = Term::ReadKey::ReadLine(0);
+    chomp($password);
+    Term::ReadKey::ReadMode('restore');
+    print "\n";
+    return $password;
+}
+
+sub _getOther {
+    my $prompt = shift;
+
+    eval "require Term::ReadKey;";
+    if ($@) {
+        die "In order to be prompted for the pw, you must have Term::ReadKey installed.  Try: 'apt-get install libterm-readkey-perl'\n";
+    }
+    print $prompt;
+    my $data = Term::ReadKey::ReadLine(0);
+    chomp($data);
+    return $data;
+}
 
