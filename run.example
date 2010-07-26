@@ -1,0 +1,6 @@
+#!/bin/sh
+
+HOST="some.url/here"
+
+sudo ./vpnConnect --host "$HOST" --url "https://$HOST/dana-na/auth/url_0/welcome.cgi" --force --token $1
+
