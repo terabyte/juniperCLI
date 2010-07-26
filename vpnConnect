@@ -9,6 +9,7 @@ use Readonly;
 use File::Path qw(make_path);
 use Getopt::Long;
 use Term::ReadLine;
+use FindBin qw($Bin);
 
 
 Readonly my $TMP_PATH => '/tmp/vpnConnect/';
@@ -19,6 +20,8 @@ Readonly my $CONTINUE_BTN_NAME => 'btnContinue';
 Readonly my $TOKEN_RESYNC => 'Token Resync Required';
 Readonly my $TOKEN_RESYNC_BTN_NAME => 'secidactionEnter';
 Readonly my $LOGIN_FAIL => 'Invalid secondary username or password';
+Readonly my $NCUI_PATH => "$Bin/juniper/ncui";
+Readonly my $SSL_CERT_PATH => "$Bin/ssl.crt";
 
 BEGIN: {
 
@@ -26,11 +29,16 @@ BEGIN: {
         # TODO: error handling?
         make_path($TMP_PATH);
     }
+
 };
 
 MAIN: {
 
-    my ($user, $password, $token, $force, $noninteractive, $host);
+    my ($user, $password, $token, $force, $noninteractive, $url, $host);
+
+    if ( $> != 0 ) {
+        die "InvocationException: this script must be run as root\n";
+    }
 
     my $status = GetOptions(
         'user=s' => \$user,
@@ -38,8 +46,21 @@ MAIN: {
         'password=s' => \$password,
         'force' => \$force,
         'noninteractive' => \$noninteractive,
-        'host' => \$host,
-    );
+        'url=s' => \$url,
+        'host=s' => \$host,
+    )
+        or die "Bad arguments, TODO: XXX: write documentation\n";
+
+    if (! $url ) {
+        die "--url is required - pass the URL for the login page\n";
+    }
+
+    print "URL: '$url'\n";
+    if ( $url =~ m{^https?://([^/]+)/} ) {
+        $host = $1;
+    } else {
+        die "URL '$url' is in an unparsable format\n";
+    }
 
     if (! $password || ! $user) {
         print "No user/pw given, Using $NETRC_PATH\n";
@@ -55,6 +76,10 @@ MAIN: {
     if (! $token) {
         die "--token is required!\n";
     }
+
+    _generateSsl($host);
+    die "$NCUI_PATH is not executable\n"
+        unless ( -x $NCUI_PATH );
 
     print "user $user token $token (pw redacted)\n";
 
@@ -111,11 +136,71 @@ MAIN: {
 
     my $DSID = _getDsidFromCookies($mech->{'cookie_jar'});
 
-    "Found DSID: $DSID\n";
+    # now run: sudo ./ncui -h portal.example.com -c DSID=nnnn.... -f ssl.crt
+    _run("$NCUI_PATH -h $host -c DSID=$DSID -f $SSL_CERT_PATH");
 
-    # now run: sudo ./ncui -h $host -c DSID=5d189773608999548c8c56d76a53ec16 -f ssl.crt
     exit 0;
 };
+
+sub _run {
+    my $cmd = shift;
+
+    print "Executing cmd: '$cmd'\n";
+
+    (!system($cmd))
+        or die "Unable to execte command: $!\n";
+}
+
+sub _generateSsl {
+    my ($host) = @_;
+
+    return if ( -r $SSL_CERT_PATH );
+
+    print "Unable to read ssl cert file at '$SSL_CERT_PATH', trying to generate a new one\n";
+
+    if ($host !~ m/:/) {
+        # append the default port
+        $host = "$host:443";
+    }
+
+    print "Detected hostname: '$host'\n";
+    my $cert = [ split("\n", `echo | openssl s_client -connect $host 2>&1`) ];
+    my $lines = [];
+    my $certStart = 0;
+    my $certEnd = 0;
+
+    foreach my $line ( @{$cert} ) {
+        if ($certStart && ! $certEnd) {
+            # look for cert end
+            if ( $line =~ m/-END CERTIFICATE-/ ) {
+                $certEnd = 1;
+                last;
+            }
+
+            # push line
+            push @{$lines}, $line;
+            next;
+        }
+        # havent found cert start yet
+        next unless ($line =~ m/-BEGIN CERTIFICATE-/);
+        $certStart = 1;
+    }
+
+    if (scalar @{$lines} > 0) {
+        print "Got certificate, converting to appropriate form\n";
+        open(my $OPENSSL_X509, '| openssl x509 -outform der > $SSL_CERT_PATH')
+            or die "IOException: Unable to open pipe from this script: $!\n";
+        foreach my $line ( @{$lines} ) {
+            print  $OPENSSL_X509 $line;
+        }
+        close($OPENSSL_X509)
+            or die "IOException: Unable to close pipe to openssl: $!\n";
+    }
+
+    if ( ! -r $SSL_CERT_PATH ) {
+        die "IOException: Still unable to read ssl cert file after trying to generate it: $!\n";
+    }
+}
 
 sub _getDsidFromCookies {
     my $cookieJar = shift;
