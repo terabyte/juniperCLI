@@ -15,11 +15,12 @@ apt-get install gcc-multilib
 
 3. Invoke GCC on the shared object file
 
-You should have libncui.so.  Invoke gcc like so:
+You should have libncui.so.  From the directory which contains libncui.so,
+invoke gcc like so:
 
-gcc -m32 -Wl,-rpath,`pwd` -o ncui libncui.o
+gcc -m32 -Wl,-rpath,`pwd` -o ncui libncui.so
 
-It is important you run this command in the same directory as the libncui.o
+It is important you run this command in the same directory as the libncui.so
 file, and you keep the shared object file as well as the binary in the same
 directory.
 
